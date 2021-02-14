@@ -1,13 +1,13 @@
 #![cfg(all(target_family = "unix", not(target_os = "macos")))]
 
-use gdk_sys::{gdk_threads_add_idle, GdkGeometry, GdkRGBA, GDK_HINT_MIN_SIZE};
+use gdk_sys::{gdk_threads_add_idle, GdkGeometry, GdkRGBA, GDK_HINT_MIN_SIZE, GdkEventButton, GDK_BUTTON_PRESS};
 use gio_sys::GAsyncResult;
 use glib_sys::*;
 use gobject_sys::{g_signal_connect_data, GObject};
 use gtk_sys::*;
 use javascriptcore_sys::*;
 use libc::{c_char, c_double, c_int, c_void};
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::mem;
 use std::ptr;
 use webkit2gtk_sys::*;
@@ -188,6 +188,38 @@ unsafe extern "C" fn webview_new(
         0,
     );
 
+    webkit_user_content_manager_register_script_message_handler(
+        m,
+        CStr::from_bytes_with_nul_unchecked(b"windowDrag\0").as_ptr(),
+    );
+
+    g_signal_connect_data(
+        mem::transmute(m),
+        CStr::from_bytes_with_nul_unchecked(b"script-message-received::windowDrag\0").as_ptr(),
+        Some(mem::transmute(window_drag_message_received_cb as *const ())),
+        mem::transmute(w),
+        None,
+        0,
+    );
+
+    g_signal_connect_data(
+        mem::transmute(webview),
+        CStr::from_bytes_with_nul_unchecked(b"button-press-event\0").as_ptr(),
+        Some(mem::transmute(window_button_press_event_cb as *const ())),
+        mem::transmute(w),
+        None,
+        0,
+    );
+
+    g_signal_connect_data(
+        mem::transmute(webview),
+        CStr::from_bytes_with_nul_unchecked(b"button-release-event\0").as_ptr(),
+        Some(mem::transmute(window_button_release_event_cb as *const ())),
+        mem::transmute(w),
+        None,
+        0,
+    );
+
     let webview = webkit_web_view_new_with_user_content_manager(m);
     (*w).webview = webview;
     webkit_web_view_load_uri(
@@ -233,7 +265,7 @@ unsafe extern "C" fn webview_new(
 
     webkit_web_view_run_javascript(
         mem::transmute(webview),
-        CStr::from_bytes_with_nul_unchecked(b"window.external={invoke:function(x){window.webkit.messageHandlers.external.postMessage(x);}}\0").as_ptr(),
+        CString::new(include_str!("webview_preload_gtk.js")).as_ptr(),
         ptr::null_mut(),
         None,
         ptr::null_mut(),
@@ -275,6 +307,50 @@ unsafe extern "C" fn external_message_received_cb(
     s.reserve(n);
     JSStringGetUTF8CString(js, s.as_mut_ptr(), n);
     ((*webview).external_invoke_cb)(webview, s.as_ptr());
+}
+
+unsafe extern "C" fn window_drag_message_received_cb(
+    _m: *mut WebKitUserContentManager,
+    _r: *mut WebKitJavascriptResult,
+    arg: gpointer,
+) {
+    let webview: *mut WebView = mem::transmute(arg);
+    let last_left_mouse_down_event = webview.last_left_mouse_down_event;
+    if last_left_mouse_down_event.is_null() { return; }
+    let window = webview.window;
+    gtk_window_begin_move_drag(
+        mem::transmute(window),
+        last_left_mouse_down_event.button as c_int,
+        last_left_mouse_down_event.x_root as c_int,
+        last_left_mouse_down_event.y_root as c_int,
+        last_left_mouse_down_event.time,
+    );
+    (*webview).last_left_mouse_down_event = ptr::null_mut();
+}
+
+unsafe extern "C" fn window_button_press_event_cb(
+    _w: *mut GtkWidget,
+    e: *mut GdkEventButton,
+    arg: gpointer,
+) -> gboolean {
+    let webview: *mut WebView = mem::transmute(arg);
+    if e.button == 1 && e.type_ == GDK_BUTTON_PRESS {
+        (*webview).last_left_mouse_down_event = e;
+    }
+    (*webview).last_left_mouse_down_event = ptr::null_mut();
+    GFALSE
+}
+
+unsafe extern "C" fn window_button_release_event_cb(
+    _w: *mut GtkWidget,
+    e: *mut GdkEventButton,
+    arg: gpointer,
+) -> gboolean {
+    let webview: *mut WebView = mem::transmute(arg);
+    if e.button == 1 && e.type_ == GDK_BUTTON_PRESS {
+        (*webview).last_left_mouse_down_event = ptr::null_mut();
+    }
+    GFALSE
 }
 
 #[no_mangle]
