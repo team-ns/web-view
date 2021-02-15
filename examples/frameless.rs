@@ -24,8 +24,8 @@ fn main() {
 const HTML: &str = r#"
 <!doctype html>
 <html>
-	<body>
-        <button onclick="external.invoke('exit')" style="display:block;width:100px;height:100px;font-size:24pt;margin:25px auto;">exit</button>
+	<body data-webview-drag>
+        <button data-webview-no-drag onclick="external.invoke('exit')" style="display:block;width:100px;height:100px;font-size:24pt;margin:25px auto;">exit</button>
 	</body>
 </html>
 "#;
