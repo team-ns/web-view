@@ -8,6 +8,9 @@
 #[cfg(all(target_family = "unix", not(target_os = "macos")))]
 mod gtk;
 
+#[cfg(target_os = "windows")]
+mod webview2;
+
 use std::os::raw::*;
 
 pub enum CWebView {} // opaque type, only used in ffi pointers
