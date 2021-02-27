@@ -26,6 +26,7 @@ struct WebView {
     visible: c_int,
     min_width: c_int,
     min_height: c_int,
+    hide_instead_of_close: c_int,
     external_invoke_cb: ExternalInvokeCallback,
     window: *mut GtkWidget,
     scroller: *mut GtkWidget,
@@ -97,6 +98,7 @@ unsafe extern "C" fn webview_new(
     visible: c_int,
     min_width: c_int,
     min_height: c_int,
+    hide_instead_of_close: c_int,
     external_invoke_cb: ExternalInvokeCallback,
     userdata: *mut c_void,
 ) -> *mut WebView {
@@ -111,6 +113,7 @@ unsafe extern "C" fn webview_new(
         visible,
         min_width,
         min_height,
+        hide_instead_of_close,
         external_invoke_cb,
         window: ptr::null_mut(),
         scroller: ptr::null_mut(),
@@ -248,6 +251,10 @@ unsafe extern "C" fn webview_new(
         0,
     );
 
+    if hide_instead_of_close != 0 {
+        gtk_widget_hide_on_delete(window);
+    }
+
     w
 }
 
@@ -290,6 +297,10 @@ unsafe extern "C" fn webview_free(webview: *mut WebView) {
 #[no_mangle]
 unsafe extern "C" fn webview_loop(webview: *mut WebView, blocking: c_int) -> c_int {
     gtk_main_iteration_do(blocking);
+    if (*webview).should_exit != 0 {
+        gtk_window_close((*webview).window as *mut GtkWindow);
+        gtk_main_iteration_do(0);
+    }
     (*webview).should_exit
 }
 
@@ -404,12 +415,16 @@ unsafe extern "C" fn webview_dispatch(webview: *mut WebView, func: DispatchFn, a
 
 #[no_mangle]
 unsafe extern "C" fn webview_destroy_cb(_widget: *mut GtkWidget, arg: gpointer) {
-    webview_exit(mem::transmute(arg));
+    let webview: *mut WebView = mem::transmute(arg);
+    if webview.is_null() || (*webview).hide_instead_of_close == 0 {
+        webview_exit(webview);
+    }
 }
 
 #[no_mangle]
 unsafe extern "C" fn webview_exit(webview: *mut WebView) {
     (*webview).should_exit = 1;
+    webview_loop(webview, 0); // pump the event loop to apply
 }
 
 #[no_mangle]

@@ -23,6 +23,7 @@ struct cocoa_webview {
   int visible;
   int min_width;
   int min_height;
+  int hide_instead_of_close;
   webview_external_invoke_cb_t external_invoke_cb;
   struct webview_priv priv;
   void *userdata;
@@ -39,7 +40,7 @@ WEBVIEW_API void* webview_get_user_data(webview_t w) {
 
 WEBVIEW_API webview_t webview_new(
   const char* title, const char* url, 
-  int width, int height, int resizable, int debug, int frameless, int visible, int min_width, int min_height,
+  int width, int height, int resizable, int debug, int frameless, int visible, int min_width, int min_height, int hide_instead_of_close,
   webview_external_invoke_cb_t external_invoke_cb, void* userdata) {
 	struct cocoa_webview* wv = (struct cocoa_webview*)calloc(1, sizeof(*wv));
 	wv->width = width;
@@ -52,6 +53,7 @@ WEBVIEW_API webview_t webview_new(
   wv->visible = visible;
   wv->min_width = min_width;
   wv->min_height = min_height;
+  wv->hide_instead_of_close = hide_instead_of_close;
 	wv->external_invoke_cb = external_invoke_cb;
 	wv->userdata = userdata;
 	if (webview_init(wv) != 0) {
@@ -134,6 +136,19 @@ static void webview_window_will_close(id self, SEL cmd, id notification) {
   objc_msgSend(app, sel_registerName("postEvent:atStart:"), event, 
                     objc_msgSend((id)objc_getClass("NSDate"),
                       sel_registerName("distantPast")));
+}
+
+static bool webview_window_should_close(id self, SEL cmd, id sender) {
+  struct cocoa_webview *wv =
+      (struct cocoa_webview *)objc_getAssociatedObject(self, "webview");
+
+  if (wv->hide_instead_of_close) {
+    webview_set_visible(wv, 0);
+
+    return false;
+  } else {
+    return true;
+  }
 }
 
 static void webview_external_invoke(id self, SEL cmd, id contentController,
@@ -361,6 +376,8 @@ WEBVIEW_API int webview_init(webview_t w) {
     class_addProtocol(__NSWindowDelegate, objc_getProtocol("NSWindowDelegate"));
     class_replaceMethod(__NSWindowDelegate, sel_registerName("windowWillClose:"),
                         (IMP)webview_window_will_close, "v@:@");
+    class_replaceMethod(__NSWindowDelegate, sel_registerName("windowShouldClose:"),
+                        (IMP)webview_window_should_close, "B@:@");
     objc_registerClassPair(__NSWindowDelegate);
   }
 
@@ -671,9 +688,37 @@ WEBVIEW_API void webview_dispatch(webview_t w, webview_dispatch_fn fn,
   dispatch_async_f(dispatch_get_main_queue(), context, webview_dispatch_cb);
 }
 
+id read_object_property(id obj, const char* property) {
+  Class cls = object_getClass(obj);
+  if (cls == NULL) { return NULL; }
+  objc_property_t prop = class_getProperty(cls, property);
+  if (prop == NULL) { return NULL; }
+  const char* getter = property_copyAttributeValue(prop, "G");
+  if (getter == NULL) {
+    return objc_msgSend(obj, sel_registerName(property));
+  } else {
+    return objc_msgSend(obj, sel_registerName(getter));
+  }
+}
+
 WEBVIEW_API void webview_exit(webview_t w) {
   struct cocoa_webview* wv = (struct cocoa_webview*)w;
   wv->external_invoke_cb = NULL;
+  /*
+    This will try to read webview->configuration->userContentController and clear
+    the associated webview which is set in the init function. It is necessary
+    to avoid zombie callbacks where the controller invokes external_invoke_cb
+    of a dead webview and causes a segfault (external_invoke_cb of a dead webview
+    can become non-null if the memory previously owned by the webview
+    is re-allocated to something else).
+  */
+  id config = read_object_property(wv->priv.webview, "configuration");
+  if (config != NULL) {
+    id controller = read_object_property(config, "userContentController");
+    if (controller != NULL) {
+      objc_setAssociatedObject(controller, "webview", NULL, OBJC_ASSOCIATION_ASSIGN);
+    }
+  }
   objc_msgSend(wv->priv.window, sel_registerName("close"));
 }
 

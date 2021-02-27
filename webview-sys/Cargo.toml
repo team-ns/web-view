@@ -1,6 +1,6 @@
 [package]
 name = "webview-sys"
-version = "0.6.1"
+version = "0.6.2"
 authors = ["Boscop", "zxey <r.hozak@seznam.cz>"]
 license = "MIT"
 repository = "https://github.com/Boscop/web-view"
@@ -10,6 +10,7 @@ categories = ["gui", "web-programming", "api-bindings", "rendering", "visualizat
 build = "build.rs"
 links = "webview"
 edition = "2018"
+exclude = ["Cargo.lock"]
 
 [lib]
 name = "webview_sys"
